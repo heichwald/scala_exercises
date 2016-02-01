@@ -124,36 +124,34 @@ case class Blob(blob: Vector[Vector[Int]]) {
 
   /**
     * Is the point defined by row index and column index in the virtual square defined by the 4 boundaries of the blob -top, bottom, left and right- ?
-    * @param blobEdges blob edges
     * @param rowIndex row index
     * @param columnIndex column index
     * @return whether the point defined by row index and column index in the virtual square defined by the 4 boundaries of the blob
     */
-  private def isInBlobSquare(blobEdges: BlobEdges, rowIndex: Int, columnIndex: Int) =
-    blobEdges.left <= columnIndex && columnIndex <= blobEdges.right && blobEdges.top <= rowIndex && rowIndex <= blobEdges.bottom
+  private def isInBlobSquare(rowIndex: Int, columnIndex: Int) =
+    _maxEdges.left <= columnIndex && columnIndex <= _maxEdges.right && _maxEdges.top <= rowIndex && rowIndex <= _maxEdges.bottom
 
 
   /**
     * Find first index where the cell is a 1 in a row or in a column
     * Side-effect: we incr the reads when we read a cell
     * @param isRow do we iterate on a row or column
-    * @param blobEdges the blob edges so we do not read unecessary cells
     * @param index index of a column or row
     * @param indices indices to iterate over
     * @return first index where the cell is a 1 or - 1
     */
   @tailrec
-  private def firstOneIndex(isRow: Boolean)(blobEdges: BlobEdges, index: Int, indices: Seq[Int]): Int = indices match {
+  private def firstOneIndex(isRow: Boolean)(index: Int, indices: Seq[Int]): Int = indices match {
     case Seq() => -1
     case Seq(i, xs@_*) =>
       val rowIndex = if (isRow) index else i
       val columnIndex = if (isRow) i else index
       val row = blob(rowIndex)
-      if (columnIndex >= 0 && columnIndex < row.size && !isInBlobSquare(blobEdges, rowIndex, columnIndex)) {
+      if (columnIndex >= 0 && columnIndex < row.size && !isInBlobSquare(rowIndex, columnIndex)) {
         _reads += 1
-        if (row(columnIndex) == 1) i else firstOneIndex(isRow)(blobEdges, index, xs)
+        if (row(columnIndex) == 1) i else firstOneIndex(isRow)(index, xs)
       } else {
-        firstOneIndex(isRow)(blobEdges, index, xs)
+        firstOneIndex(isRow)(index, xs)
       }
 
   }
@@ -164,17 +162,17 @@ case class Blob(blob: Vector[Vector[Int]]) {
   /**
     * Search max blob edges by dichotomy
     * _maxEdges is modified along the way
-    * @param blobEdges max new blob edges so far
     * @param q a queue of perimeters in the matrix where we have to look for potential new blob edges
     */
   @tailrec
-  private def edgesByDichotomy(blobEdges: BlobEdges, q: Queue[SearchPerimeter]): Unit = {
+  private def edgesByDichotomy(q: Queue[SearchPerimeter]): Unit = {
 
     /**
       * Look for new edges in  an search perimeter from the queue
+      * @param searchPerimeter the search perimeter in which we look for new blob boundaries
+      * @return the new boundaries and a list of subsequent perimeters to search in
       */
-    lazy val queueNonEmpty = {
-      val (searchPerimeter, newQ) = q.dequeue
+    def searchInPerimeter(searchPerimeter: SearchPerimeter): (BlobEdges, List[SearchPerimeter]) = {
 
       /**
         * We can optimize our algorithm by moving a row or column outside of the virtual square defined by the max edges found so far
@@ -206,38 +204,12 @@ case class Blob(blob: Vector[Vector[Int]]) {
       def tryMoveRowToOutsideBlobSquare =
         tryMoveToOutsideBlobSquare(searchPerimeter.lowRow, searchPerimeter.highRow, _maxEdges.top, _maxEdges.bottom)_
 
-      /**
-        * Search for new edges by dichotomy in 2 sub zones
-        * @param b new know blog edges (will be compared with max edges)
-        * @param l a list of new perimeters to search in (2 elements)
-        * @return new blob edges, new queue
-        */
-      def dichotomyIn2SubZones(b: BlobEdges)(l: List[SearchPerimeter]) = (b, newQ.enqueue(l))
-
-
-      def dichotomyIn2SubZonesByColumn(topEdge: Int, bottomEdge: Int, column: Int) =
-        dichotomyIn2SubZones(BlobEdges(
-          topEdge,
-          bottomEdge,
-          column,
-          column
-        ))_
-
-      def dichotomyIn2SubZonesByRow(leftEdge: Int, rightEdge: Int, row: Int) =
-        dichotomyIn2SubZones(
-          BlobEdges(
-            row,
-            row,
-            leftEdge,
-            rightEdge
-          ))_
-
 
       if (!isValid(searchPerimeter)) {
         /**
           * If the perimeter is not valid (like low > high), we just discard it
           */
-        (blobEdges, newQ)
+        (_maxEdges, Nil)
       } else {
         val tempMidRowIndex = mid(searchPerimeter.lowRow, searchPerimeter.highRow)
         val tempMidColumnIndex = mid(searchPerimeter.lowColumn, searchPerimeter.highColumn)
@@ -249,40 +221,14 @@ case class Blob(blob: Vector[Vector[Int]]) {
         /**
           * We try to find the first 1 in the new search perimeter on the mid row
           */
-        val leftEdge = firstOneIndexRow(blobEdges, midRowIndex, searchPerimeter.lowColumn to searchPerimeter.highColumn)
+        val leftEdge = firstOneIndexRow(midRowIndex, searchPerimeter.lowColumn to searchPerimeter.highColumn)
 
-        /**
-          * Find the index of a top 1 in the mid column
-          * @param startIndex index included to start the research, we move down
-          * @param endIndex index excluded to stop the research
-          * @return the index or -1
-          */
-        def findTop(startIndex: Int, endIndex: Int) =  firstOneIndexColumn(blobEdges, midColumnIndex, startIndex until endIndex)
-
-        /**
-          * Find the index of a bottom 1 in the mid column, if none found default to the top found or -1
-          * @param bottomRowMaxIndex the bottom index where to start to look for a 1, we move up
-          * @param topEdge the top edge
-          * @return the index of a bottom 1 in the mid column, if none found default to the top found or -1
-          */
-        def findBottom(bottomRowMaxIndex: Int, topEdge: Int = -1) = {
-          val i = firstOneIndexColumn(blobEdges, midColumnIndex, bottomRowMaxIndex until topEdge by -1)
-          if (i == -1) topEdge else i
-        }
-
-        /**
-          * We divide our perimeter in 4 sub perimeters and look for new edges there
-          * @param newBlobEdges the new know blog edges (will be compared with max edges)
-          * @return new blob edges, new queue
-          */
-        def dichotomyIn4SubZones(newBlobEdges: BlobEdges) =
-          (
-            newBlobEdges,
-            newQ.enqueue(List(
-              SearchPerimeter(searchPerimeter.lowRow, midRowIndex - 1, searchPerimeter.lowColumn, midColumnIndex - 1),
-              SearchPerimeter(searchPerimeter.lowRow, midRowIndex - 1, midColumnIndex + 1, searchPerimeter.highColumn),
-              SearchPerimeter(midRowIndex + 1, searchPerimeter.highRow, searchPerimeter.lowColumn, midColumnIndex - 1),
-              SearchPerimeter(midRowIndex + 1, searchPerimeter.highRow, midColumnIndex + 1, searchPerimeter.highColumn)))
+        lazy val fourSubZonesPerimeters =
+          List(
+            SearchPerimeter(searchPerimeter.lowRow, midRowIndex - 1, searchPerimeter.lowColumn, midColumnIndex - 1),
+            SearchPerimeter(searchPerimeter.lowRow, midRowIndex - 1, midColumnIndex + 1, searchPerimeter.highColumn),
+            SearchPerimeter(midRowIndex + 1, searchPerimeter.highRow, searchPerimeter.lowColumn, midColumnIndex - 1),
+            SearchPerimeter(midRowIndex + 1, searchPerimeter.highRow, midColumnIndex + 1, searchPerimeter.highColumn)
           )
 
         /**
@@ -292,7 +238,7 @@ case class Blob(blob: Vector[Vector[Int]]) {
           /**
             * We look for a right index until left, if none found, it will be left index
             */
-          val rightEdgeUntilLeft = firstOneIndexRow(blobEdges, midRowIndex, searchPerimeter.highColumn until leftEdge by -1)
+          val rightEdgeUntilLeft = firstOneIndexRow(midRowIndex, searchPerimeter.highColumn until leftEdge by -1)
           val rightEdge = if (rightEdgeUntilLeft != -1) rightEdgeUntilLeft else leftEdge
           /**
             * We look for a 1 in the top half of the square on the mid column
@@ -329,99 +275,83 @@ case class Blob(blob: Vector[Vector[Int]]) {
                 SearchPerimeter(midRowIndex + 1, searchPerimeter.highRow, midColumnIndex + 1, searchPerimeter.highColumn)
               )
             }
-            dichotomyIn2SubZonesByRow(
-              maxLeftEdge,
-              maxRightEdge,
-              midRowIndex
-            )(l)
+            (BlobEdges(midRowIndex, midRowIndex, leftEdge, rightEdge), l)
           }
 
-          /**
-            * Only ones in 1 half of the perimeter
-            */
           if (topEdge == midRowIndex &&
             (maxLeftEdge < midColumnIndex && maxRightEdge < midColumnIndex || maxLeftEdge > midColumnIndex && maxRightEdge > midColumnIndex)
-          ) allOnesInOneSideOfPerimeter
-          else dichotomyIn4SubZones(BlobEdges(topEdge, bottomEdge, maxLeftEdge, maxRightEdge))
+          ) allOnesInOneSideOfPerimeter // Only ones in 1 half of the perimeter
+          else (BlobEdges(topEdge, bottomEdge, maxLeftEdge, maxRightEdge), fourSubZonesPerimeters)
         }
 
         /**
-          * What do we do when no one in row
+          * What do we do when no one in mid row adjusted
           */
         lazy val noOneInRow = {
 
           /**
-            * What do we do when no one in top half on the mid column
+            * What do we do when no one in top half on the mid column adjusted
             */
           lazy val noOneInTopHalf = {
             /**
-              * Look for a one in bottom half on the mid column
+              * Look for a one in bottom half on the mid column adjusted
               * First a top and if we have a top, then a bottom
               */
             val topEdgeOnBottomHalf =
               if (midRowIndex < searchPerimeter.highRow) findTop(midRowIndex + 1, searchPerimeter.highRow + 1) else -1
             if (topEdgeOnBottomHalf != -1) {
               oneInBottomHalf(topEdgeOnBottomHalf)
-            } else {
-              if (_maxEdges == emptyEdges) dichotomyIn4SubZones(blobEdges) // if none blob edges found so far, we know nothing
+            } else if (_maxEdges == emptyEdges) (_maxEdges, fourSubZonesPerimeters) // if none blob edges found so far, we know nothing
               else noOneInColumn
-            }
           }
 
           /**
             * What do we do when we have a one in top half?
-            * First find a potential bottom 1 and then do dichotomy in only 2 sub zones
+            * First find a potential bottom 1 and find next 2 sub zones to search in
             * @param topEdgeOnTopHalf the top edge on top half
-            * @return new blob edges, new queue
+            * @return new blob edges, new search perimeters
             */
           def oneInTopHalf(topEdgeOnTopHalf: Int) = {
             val bottomEdge = findBottom(midRowIndex - 1, topEdgeOnTopHalf)
-            dichotomyIn2SubZonesByColumn(
-              topEdgeOnTopHalf,
-              bottomEdge,
-              midColumnIndex
-            )(List(
-              SearchPerimeter(searchPerimeter.lowRow, midRowIndex - 1, searchPerimeter.lowColumn, midColumnIndex - 1),
-              SearchPerimeter(searchPerimeter.lowRow, midRowIndex - 1, midColumnIndex + 1, searchPerimeter.highColumn)
-            ))
+            (
+              BlobEdges(topEdgeOnTopHalf, bottomEdge, midColumnIndex, midColumnIndex),
+              List(
+                SearchPerimeter(searchPerimeter.lowRow, midRowIndex - 1, searchPerimeter.lowColumn, midColumnIndex - 1),
+                SearchPerimeter(searchPerimeter.lowRow, midRowIndex - 1, midColumnIndex + 1, searchPerimeter.highColumn)
+              )
+            )
           }
 
           /**
             * What do we do when we have a one in bottom half
-            * First find a potential bottom 1 and then do dichotomy in only 2 sub zones
+            * First find a potential bottom 1 and find next 2 sub zones to search in
             * @param topEdgeOnBottomHalf the top edge on bottom half
-            * @return new blob edges, new queue
+            * @return new blob edges, new search perimeters
             */
           def oneInBottomHalf(topEdgeOnBottomHalf: Int) = {
             val bottomEdge = findBottom(searchPerimeter.highRow, topEdgeOnBottomHalf)
-            dichotomyIn2SubZonesByColumn(
-              topEdgeOnBottomHalf,
-              bottomEdge,
-              midColumnIndex
-            )(List(
+            (
+              BlobEdges(topEdgeOnBottomHalf, bottomEdge, midColumnIndex, midColumnIndex),
+              List(
                 SearchPerimeter(midRowIndex + 1, searchPerimeter.highRow, searchPerimeter.lowColumn, midColumnIndex - 1),
                 SearchPerimeter(midRowIndex + 1, searchPerimeter.highRow, midColumnIndex + 1, searchPerimeter.highColumn)
-            ))
-
+              )
+            )
           }
 
           /**
-            * What do we do when we don't have a one in the mid column (and no one in the row)
-            * We can limit our next dichotomy to only one sub zone
+            * What do we do when we don't have a one in the mid column adjusted (and no one in the mid row adjusted)
+            * We can potentially limit our next perimeter to only one sub zone
             */
           lazy val noOneInColumn = {
             if (_maxEdges == emptyEdges) {
-              dichotomyIn4SubZones(blobEdges) // We know nothing so far
+              (_maxEdges, fourSubZonesPerimeters) // We know nothing so far
             } else {
               val lowColumnIndex = if (_maxEdges.left > midColumnIndex) midColumnIndex + 1 else searchPerimeter.lowColumn
               val highColumnIndex = if (_maxEdges.left > midColumnIndex) searchPerimeter.highColumn else midColumnIndex - 1
               val lowRowIndex = if (_maxEdges.top > midRowIndex) midRowIndex + 1 else searchPerimeter.lowRow
               val highRowIndex = if (_maxEdges.top > midRowIndex) searchPerimeter.highRow else midRowIndex - 1
-              (blobEdges,
-                newQ.enqueue(
-                  List(SearchPerimeter(lowRowIndex, highRowIndex, lowColumnIndex, highColumnIndex))
-                )
-              )
+              (_maxEdges, List(SearchPerimeter(lowRowIndex, highRowIndex, lowColumnIndex, highColumnIndex)))
             }
           }
 
@@ -429,17 +359,37 @@ case class Blob(blob: Vector[Vector[Int]]) {
           if (topEdgeOnTopHalf != -1) oneInTopHalf(topEdgeOnTopHalf) else noOneInTopHalf
         }
 
+        /**
+          * Find the index of a top 1 in the mid column
+          * @param startIndex index included to start the research, we move down
+          * @param endIndex index excluded to stop the research
+          * @return the index or -1
+          */
+        def findTop(startIndex: Int, endIndex: Int) =  firstOneIndexColumn(midColumnIndex, startIndex until endIndex)
+
+        /**
+          * Find the index of a bottom 1 in the mid column, if none found default to the top found or -1
+          * @param bottomRowMaxIndex the bottom index where to start to look for a 1, we move up
+          * @param topEdge the top edge
+          * @return the index of a bottom 1 in the mid column, if none found default to the top found or -1
+          */
+        def findBottom(bottomRowMaxIndex: Int, topEdge: Int = -1) = {
+          val i = firstOneIndexColumn(midColumnIndex, bottomRowMaxIndex until topEdge by -1)
+          if (i == -1) topEdge else i
+        }
+
         if (leftEdge != -1) oneInRowFound else noOneInRow
       }
     }
 
     if (!q.isEmpty) {
-      val (edges, newQ) = queueNonEmpty
+      val (searchPerimeter, newQ) = q.dequeue
+      val (newEdges, newPerimeters) = searchInPerimeter(searchPerimeter)
       /**
         * Potentially, we have 1 closer to the matrix edges
         */
-      updateMaxEdges(edges)
-      edgesByDichotomy(_maxEdges, newQ)
+      updateMaxEdges(newEdges)
+      edgesByDichotomy(newQ.enqueue(newPerimeters))
     }
   }
 
@@ -447,8 +397,9 @@ case class Blob(blob: Vector[Vector[Int]]) {
   /**
     * Find the top, bottom, left, right edges for a blob
     */
-  lazy val blobEdges = {
-    edgesByDichotomy(emptyEdges, Queue[SearchPerimeter](SearchPerimeter(0, blob.size - 1, 0, blob(0).size - 1)))
+  lazy val edges = {
+    if (blob.size > 0 && blob(0).size > 0)
+      edgesByDichotomy(Queue[SearchPerimeter](SearchPerimeter(0, blob.size - 1, 0, blob(0).size - 1)))
     _maxEdges
   }
 }
